@@ -1,31 +1,11 @@
 #!powershell
-# This file is part of Ansible
-#
-# Copyright 2015, Peter Mounce <public@neverrunwithscissors.com>
-#
-# Ansible is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Ansible is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Ansible.  If not, see <http://www.gnu.org/licenses/>.
+
+# Copyright: (c) 2015, Peter Mounce <public@neverrunwithscissors.com>
+# GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
+
+#Requires -Module Ansible.ModuleUtils.Legacy
 
 $ErrorActionPreference = "Stop"
-
-# WANT_JSON
-# POWERSHELL_COMMON
-
-$params = Parse-Args $args;
-$result = New-Object PSObject;
-Set-Attr $result "changed" $false;
-
-$package = Get-AnsibleParam $params -name "name" -failifempty $true
 
 Function Find-Command
 {
@@ -73,8 +53,8 @@ Function Test-IsInstalledFromWebPI
 
     if ($LastExitCode -ne 0)
     {
-        Set-Attr $result "webpicmd_error_cmd" $cmd
-        Set-Attr $result "webpicmd_error_log" "$results"
+        $result.webpicmd_error_cmd = $cmd
+        $result.webpicmd_error_log = "$results"
 
         Throw "Error checking installation status for $package"
     }
@@ -103,8 +83,8 @@ Function Install-WithWebPICmd
 
     if ($LastExitCode -ne 0)
     {
-        Set-Attr $result "webpicmd_error_cmd" $cmd
-        Set-Attr $result "webpicmd_error_log" "$results"
+        $result.webpicmd_error_cmd = $cmd
+        $result.webpicmd_error_log = "$results"
         Throw "Error installing $package"
     }
 
@@ -116,17 +96,21 @@ Function Install-WithWebPICmd
     }
 }
 
-Try
-{
+$result = @{
+    changed = $false
+}
+
+$params = Parse-Args $args
+
+$package = Get-AnsibleParam -obj $params -name "name" -type "str" -failifempty $true
+
+Try {
     $script:executable = Find-WebPiCmd
-    if ((Test-IsInstalledFromWebPI -package $package) -eq $false)
-    {
+    if ((Test-IsInstalledFromWebPI -package $package) -eq $false) {
         Install-WithWebPICmd -package $package
     }
 
-    Exit-Json $result;
-}
-Catch
-{
+    Exit-Json $result
+} Catch {
      Fail-Json $result $_.Exception.Message
 }

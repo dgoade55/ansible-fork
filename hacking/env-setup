@@ -25,13 +25,13 @@ elif [ -n "$KSH_VERSION" ] && echo $KSH_VERSION | grep -qv '^@(#)PD KSH'; then
 else
     HACKING_DIR="$PWD/hacking"
 fi
-# The below is an alternative to readlink -fn which doesn't exist on OS X
+# The below is an alternative to readlink -fn which doesn't exist on macOS
 # Source: http://stackoverflow.com/a/1678636
 FULL_PATH=$($PYTHON_BIN -c "import os; print(os.path.realpath('$HACKING_DIR'))")
 export ANSIBLE_HOME="$(dirname "$FULL_PATH")"
 
 PREFIX_PYTHONPATH="$ANSIBLE_HOME/lib"
-PREFIX_PATH="$ANSIBLE_HOME/bin"
+PREFIX_PATH="$ANSIBLE_HOME/bin:$ANSIBLE_HOME/test/runner"
 PREFIX_MANPATH="$ANSIBLE_HOME/docs/man"
 
 expr "$PYTHONPATH" : "${PREFIX_PYTHONPATH}.*" > /dev/null || export PYTHONPATH="$PREFIX_PYTHONPATH:$PYTHONPATH"
@@ -59,7 +59,7 @@ fi
 (
 	cd "$ANSIBLE_HOME"
 	if [ "$verbosity" = silent ] ; then
-	    gen_egg_info > /dev/null 2>&1
+	    gen_egg_info > /dev/null 2>&1 &
             find . -type f -name "*.pyc" -exec rm -f {} \; > /dev/null 2>&1
 	else
 	    gen_egg_info
@@ -70,16 +70,16 @@ fi
 
 if [ "$verbosity" != silent ] ; then
     cat <<- EOF
-	
+
 	Setting up Ansible to run out of checkout...
-	
+
 	PATH=$PATH
 	PYTHONPATH=$PYTHONPATH
 	MANPATH=$MANPATH
-	
+
 	Remember, you may wish to specify your host file with -i
-	
+
 	Done!
-	
+
 	EOF
 fi

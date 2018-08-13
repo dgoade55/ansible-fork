@@ -16,58 +16,121 @@
 # along with Ansible.  If not, see <http://www.gnu.org/licenses/>.
 #
 
-ANSIBLE_METADATA = {'status': ['preview'],
-                    'supported_by': 'community',
-                    'version': '1.0'}
+ANSIBLE_METADATA = {'metadata_version': '1.1',
+                    'status': ['preview'],
+                    'supported_by': 'network'}
 
 DOCUMENTATION = '''
 ---
 module: nxos_file_copy
-version_added: "2.2"
-short_description: Copy a file to a remote NXOS device over SCP.
-description:
-    - Copy a file to the flash (or bootflash) remote network device
-      on NXOS devices.
-author:
-    - Jason Edelman (@jedelman8)
-    - Gabriele Gerbino (@GGabriele)
 extends_documentation_fragment: nxos
+version_added: "2.2"
+short_description: Copy a file to a remote NXOS device.
+description:
+  - This module supports two different workflows for copying a file
+    to flash (or bootflash) on NXOS devices.  Files can either be (1) pushed
+    from the Ansible controller to the device or (2) pulled from a remote SCP
+    file server to the device.  File copies are initiated from the NXOS
+    device to the remote SCP server.  This module only supports the
+    use of connection C(network_cli) or C(Cli) transport with connection C(local).
+author:
+  - Jason Edelman (@jedelman8)
+  - Gabriele Gerbino (@GGabriele)
 notes:
-    - The feature must be enabled with feature scp-server.
-    - If the file is already present (md5 sums match), no transfer will
-      take place.
-    - Check mode will tell you if the file would be copied.
+  - Tested against NXOS 7.0(3)I2(5), 7.0(3)I4(6), 7.0(3)I5(3),
+    7.0(3)I6(1), 7.0(3)I7(3), 6.0(2)A8(8), 7.0(3)F3(4), 7.3(0)D1(1),
+    8.3(0)
+  - When pushing files (file_pull is False) to the NXOS device,
+    feature scp-server must be enabled.
+  - When pulling files (file_pull is True) to the NXOS device,
+    feature scp-server is not required.
+  - When pulling files (file_pull is True) to the NXOS device,
+    no transfer will take place if the file is already present.
+  - Check mode will tell you if the file would be copied.
+requirements:
+  - paramiko (required when file_pull is False)
+  - SCPClient (required when file_pull is False)
+  - pexpect (required when file_pull is True)
 options:
-    local_file:
-        description:
-            - Path to local file. Local directory must exist.
-        required: true
-    remote_file:
-        description:
-            - Remote file path of the copy. Remote directories must exist.
-              If omitted, the name of the local file will be used.
-        required: false
-        default: null
-    file_system:
-        description:
-            - The remote file system of the device. If omitted,
-              devices that support a file_system parameter will use
-              their default values.
-        required: false
-        default: null
+  local_file:
+    description:
+      - When (file_pull is False) this is the path to the local file on the Ansible controller.
+        The local directory must exist.
+      - When (file_pull is True) this is the file name used on the NXOS device.
+  remote_file:
+    description:
+      - When (file_pull is False) this is the remote file path on the NXOS device.
+        If omitted, the name of the local file will be used.
+        The remote directory must exist.
+      - When (file_pull is True) this is the full path to the file on the remote SCP
+        server to be copied to the NXOS device.
+  file_system:
+    description:
+      - The remote file system of the device. If omitted,
+        devices that support a I(file_system) parameter will use
+        their default values.
+    default: "bootflash:"
+  connect_ssh_port:
+    description:
+      - SSH port to connect to server during transfer of file
+    default: 22
+    version_added: "2.5"
+  file_pull:
+    description:
+      - When (False) file is copied from the Ansible controller to the NXOS device.
+      - When (True) file is copied from a remote SCP server to the NXOS device.
+        In this mode, the file copy is initiated from the NXOS device.
+      - If the file is already present on the device it will be overwritten and
+        therefore the operation is NOT idempotent.
+    type: bool
+    default: False
+    version_added: "2.7"
+  file_pull_timeout:
+    description:
+      - Use this parameter to set timeout in seconds, when transferring
+        large files or when the network is slow.
+    default: 300
+    version_added: "2.7"
+  remote_scp_server:
+    description:
+      - The remote scp server address which is used to pull the file.
+        This is required if file_pull is True.
+    version_added: "2.7"
+  remote_scp_server_user:
+    description:
+      - The remote scp server username which is used to pull the file.
+        This is required if file_pull is True.
+    version_added: "2.7"
+  remote_scp_server_password:
+    description:
+      - The remote scp server password which is used to pull the file.
+        This is required if file_pull is True.
+    version_added: "2.7"
 '''
 
 EXAMPLES = '''
-- nxos_file_copy:
-    local_file: "./test_file.txt"
-    username: "{{ un }}"
-    password: "{{ pwd }}"
-    host: "{{ inventory_hostname }}"
+# File copy from ansible controller to nxos device
+  - name: "copy from server to device"
+    nxos_file_copy:
+      local_file: "./test_file.txt"
+      remote_file: "test_file.txt"
+
+# Initiate file copy from the nxos device to transfer file from an SCP server back to the nxos device
+  - name: "initiate file copy from device"
+    nxos_file_copy:
+      nxos_file_copy:
+      file_pull: True
+      local_file: "xyz"
+      remote_file: "/mydir/abc"
+      remote_scp_server: "192.168.0.1"
+      remote_scp_server_user: "myUser"
+      remote_scp_server_password: "myPassword"
 '''
 
 RETURN = '''
 transfer_status:
     description: Whether a file was transferred. "No Transfer" or "Sent".
+                 If file_pull is successful, it is set to "Received".
     returned: success
     type: string
     sample: 'Sent'
@@ -83,222 +146,72 @@ remote_file:
     sample: '/path/to/remote/file'
 '''
 
-
+import hashlib
 import os
-from scp import SCPClient
-import paramiko
-import time
-
-# COMMON CODE FOR MIGRATION
 import re
+import time
+import traceback
 
-from ansible.module_utils.basic import get_exception
-from ansible.module_utils.netcfg import NetworkConfig, ConfigLine
-from ansible.module_utils.shell import ShellError
+from ansible.module_utils.network.nxos.nxos import run_commands
+from ansible.module_utils.network.nxos.nxos import nxos_argument_spec, check_args
+from ansible.module_utils.basic import AnsibleModule
+from ansible.module_utils._text import to_native, to_text, to_bytes
 
 try:
-    from ansible.module_utils.nxos import get_module
+    import paramiko
+    HAS_PARAMIKO = True
 except ImportError:
-    from ansible.module_utils.nxos import NetworkModule
+    HAS_PARAMIKO = False
+
+try:
+    from scp import SCPClient
+    HAS_SCP = True
+except ImportError:
+    HAS_SCP = False
+
+try:
+    import pexpect
+    HAS_PEXPECT = True
+except ImportError:
+    HAS_PEXPECT = False
 
 
-def to_list(val):
-     if isinstance(val, (list, tuple)):
-         return list(val)
-     elif val is not None:
-         return [val]
-     else:
-         return list()
+def md5sum_check(module, dst, file_system):
+    command = 'show file {0}{1} md5sum'.format(file_system, dst)
+    remote_filehash = run_commands(module, {'command': command, 'output': 'text'})[0]
+    remote_filehash = to_bytes(remote_filehash, errors='surrogate_or_strict')
 
-
-class CustomNetworkConfig(NetworkConfig):
-
-    def expand_section(self, configobj, S=None):
-        if S is None:
-            S = list()
-        S.append(configobj)
-        for child in configobj.children:
-            if child in S:
-                continue
-            self.expand_section(child, S)
-        return S
-
-    def get_object(self, path):
-        for item in self.items:
-            if item.text == path[-1]:
-                parents = [p.text for p in item.parents]
-                if parents == path[:-1]:
-                    return item
-
-    def to_block(self, section):
-        return '\n'.join([item.raw for item in section])
-
-    def get_section(self, path):
-        try:
-            section = self.get_section_objects(path)
-            return self.to_block(section)
-        except ValueError:
-            return list()
-
-    def get_section_objects(self, path):
-        if not isinstance(path, list):
-            path = [path]
-        obj = self.get_object(path)
-        if not obj:
-            raise ValueError('path does not exist in config')
-        return self.expand_section(obj)
-
-
-    def add(self, lines, parents=None):
-        """Adds one or lines of configuration
-        """
-
-        ancestors = list()
-        offset = 0
-        obj = None
-
-        ## global config command
-        if not parents:
-            for line in to_list(lines):
-                item = ConfigLine(line)
-                item.raw = line
-                if item not in self.items:
-                    self.items.append(item)
-
-        else:
-            for index, p in enumerate(parents):
-                try:
-                    i = index + 1
-                    obj = self.get_section_objects(parents[:i])[0]
-                    ancestors.append(obj)
-
-                except ValueError:
-                    # add parent to config
-                    offset = index * self.indent
-                    obj = ConfigLine(p)
-                    obj.raw = p.rjust(len(p) + offset)
-                    if ancestors:
-                        obj.parents = list(ancestors)
-                        ancestors[-1].children.append(obj)
-                    self.items.append(obj)
-                    ancestors.append(obj)
-
-            # add child objects
-            for line in to_list(lines):
-                # check if child already exists
-                for child in ancestors[-1].children:
-                    if child.text == line:
-                        break
-                else:
-                    offset = len(parents) * self.indent
-                    item = ConfigLine(line)
-                    item.raw = line.rjust(len(line) + offset)
-                    item.parents = ancestors
-                    ancestors[-1].children.append(item)
-                    self.items.append(item)
-
-
-def get_network_module(**kwargs):
+    local_file = module.params['local_file']
     try:
-        return get_module(**kwargs)
-    except NameError:
-        return NetworkModule(**kwargs)
+        with open(local_file, 'r') as f:
+            filecontent = f.read()
+    except (OSError, IOError) as exc:
+        module.fail_json(msg="Error reading the file: %s" % to_text(exc))
 
-def get_config(module, include_defaults=False):
-    config = module.params['config']
-    if not config:
-        try:
-            config = module.get_config()
-        except AttributeError:
-            defaults = module.params['include_defaults']
-            config = module.config.get_config(include_defaults=defaults)
-    return CustomNetworkConfig(indent=2, contents=config)
+    filecontent = to_bytes(filecontent, errors='surrogate_or_strict')
+    local_filehash = hashlib.md5(filecontent).hexdigest()
 
-def load_config(module, candidate):
-    config = get_config(module)
-
-    commands = candidate.difference(config)
-    commands = [str(c).strip() for c in commands]
-
-    save_config = module.params['save']
-
-    result = dict(changed=False)
-
-    if commands:
-        if not module.check_mode:
-            try:
-                module.configure(commands)
-            except AttributeError:
-                module.config(commands)
-
-            if save_config:
-                try:
-                    module.config.save_config()
-                except AttributeError:
-                    module.execute(['copy running-config startup-config'])
-
-        result['changed'] = True
-        result['updates'] = commands
-
-    return result
-# END OF COMMON CODE
-
-def execute_show(cmds, module, command_type=None):
-    command_type_map = {
-        'cli_show': 'json',
-        'cli_show_ascii': 'text'
-    }
-
-    try:
-        if command_type:
-            response = module.execute(cmds, command_type=command_type)
-        else:
-            response = module.execute(cmds)
-    except ShellError:
-        clie = get_exception()
-        module.fail_json(msg='Error sending {0}'.format(cmds),
-                         error=str(clie))
-    except AttributeError:
-        try:
-            if command_type:
-                command_type = command_type_map.get(command_type)
-                module.cli.add_commands(cmds, output=command_type)
-                response = module.cli.run_commands()
-            else:
-                module.cli.add_commands(cmds, output=command_type)
-                response = module.cli.run_commands()
-        except ShellError:
-            clie = get_exception()
-            module.fail_json(msg='Error sending {0}'.format(cmds),
-                             error=str(clie))
-    return response
-
-
-def execute_show_command(command, module, command_type='cli_show'):
-    if module.params['transport'] == 'cli':
-        cmds = [command]
-        body = execute_show(cmds, module)
-    elif module.params['transport'] == 'nxapi':
-        cmds = [command]
-        body = execute_show(cmds, module, command_type=command_type)
-
-    return body
+    if local_filehash == remote_filehash:
+        return True
+    else:
+        return False
 
 
 def remote_file_exists(module, dst, file_system='bootflash:'):
     command = 'dir {0}/{1}'.format(file_system, dst)
-    body = execute_show_command(command, module, command_type='cli_show_ascii')
-    if 'No such file' in body[0]:
+    body = run_commands(module, {'command': command, 'output': 'text'})[0]
+    if 'No such file' in body:
         return False
-    return True
+    else:
+        return md5sum_check(module, dst, file_system)
 
 
 def verify_remote_file_exists(module, dst, file_system='bootflash:'):
     command = 'dir {0}/{1}'.format(file_system, dst)
-    body = execute_show_command(command, module, command_type='cli_show_ascii')
-    if 'No such file' in body[0]:
+    body = run_commands(module, {'command': command, 'output': 'text'})[0]
+    if 'No such file' in body:
         return 0
-    return body[0].split()[0].strip()
+    return body.split()[0].strip()
 
 
 def local_file_exists(module):
@@ -306,10 +219,10 @@ def local_file_exists(module):
 
 
 def get_flash_size(module):
-    command = 'dir {}'.format(module.params['file_system'])
-    body = execute_show_command(command, module, command_type='cli_show_ascii')
+    command = 'dir {0}'.format(module.params['file_system'])
+    body = run_commands(module, {'command': command, 'output': 'text'})[0]
 
-    match = re.search(r'(\d+) bytes free', body[0])
+    match = re.search(r'(\d+) bytes free', body)
     bytes_free = match.group(1)
 
     return int(bytes_free)
@@ -324,11 +237,8 @@ def enough_space(module):
     return True
 
 
-def transfer_file(module, dest):
+def transfer_file_to_device(module, dest):
     file_size = os.path.getsize(module.params['local_file'])
-
-    if not local_file_exists(module):
-        module.fail_json(msg='Could not transfer file. Local file doesn\'t exist.')
 
     if not enough_space(module):
         module.fail_json(msg='Could not transfer file. Not enough space on device.')
@@ -336,22 +246,24 @@ def transfer_file(module, dest):
     hostname = module.params['host']
     username = module.params['username']
     password = module.params['password']
+    port = module.params['connect_ssh_port']
 
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     ssh.connect(
         hostname=hostname,
         username=username,
-        password=password)
+        password=password,
+        port=port)
 
-    full_remote_path = '{}{}'.format(module.params['file_system'], dest)
+    full_remote_path = '{0}{1}'.format(module.params['file_system'], dest)
     scp = SCPClient(ssh.get_transport())
     try:
         scp.put(module.params['local_file'], full_remote_path)
     except:
         time.sleep(10)
         temp_size = verify_remote_file_exists(
-                    module, dest, file_system=module.params['file_system'])
+            module, dest, file_system=module.params['file_system'])
         if int(temp_size) == int(file_size):
             pass
         else:
@@ -360,57 +272,156 @@ def transfer_file(module, dest):
                              'permissions are set.', temp_size=temp_size,
                              file_size=file_size)
     scp.close()
+    ssh.close()
     return True
+
+
+def copy_file_from_remote(module, local, file_system='bootflash:'):
+    hostname = module.params['host']
+    username = module.params['username']
+    password = module.params['password']
+    port = module.params['connect_ssh_port']
+
+    try:
+        child = pexpect.spawn('ssh ' + username + '@' + hostname + ' -p' + str(port))
+        # response could be unknown host addition or Password
+        index = child.expect(['yes', '(?i)Password'])
+        if index == 0:
+            child.sendline('yes')
+            child.expect('(?i)Password')
+        child.sendline(password)
+        child.expect('#')
+        command = ('copy scp://' + module.params['remote_scp_server_user'] +
+                   '@' + module.params['remote_scp_server'] + module.params['remote_file'] +
+                   ' ' + file_system + local + ' vrf management')
+
+        child.sendline(command)
+        # response could be remote host connection time out,
+        # there is already an existing file with the same name,
+        # unknown host addition or password
+        index = child.expect(['timed out', 'existing', 'yes', '(?i)password'], timeout=180)
+        if index == 0:
+            module.fail_json(msg='Timeout occured due to remote scp server not responding')
+        elif index == 1:
+            child.sendline('y')
+            # response could be unknown host addition or Password
+            sub_index = child.expect(['yes', '(?i)password'])
+            if sub_index == 0:
+                child.sendline('yes')
+                child.expect('(?i)password')
+        elif index == 2:
+            child.sendline('yes')
+            child.expect('(?i)password')
+        child.sendline(module.params['remote_scp_server_password'])
+        fpt = module.params['file_pull_timeout']
+        # response could be that there is no space left on device,
+        # permission denied due to wrong user/password,
+        # remote file non-existent or success
+        index = child.expect(['No space', 'Permission denied', 'No such file', '#'], timeout=fpt)
+        if index == 0:
+            module.fail_json(msg='File copy failed due to no space left on the device')
+        elif index == 1:
+            module.fail_json(msg='Username/Password for remote scp server is wrong')
+        elif index == 2:
+            module.fail_json(msg='File copy failed due to remote file not present')
+    except pexpect.ExceptionPexpect as e:
+        module.fail_json(msg='%s' % to_native(e), exception=traceback.format_exc())
+
+    child.close()
 
 
 def main():
     argument_spec = dict(
-            local_file=dict(required=True),
-            remote_file=dict(required=False),
-            file_system=dict(required=False, default='bootflash:'),
-            include_defaults=dict(default=True),
-            config=dict(),
-            save=dict(type='bool', default=False)
+        local_file=dict(type='str'),
+        remote_file=dict(type='str'),
+        file_system=dict(required=False, default='bootflash:'),
+        connect_ssh_port=dict(required=False, type='int', default=22),
+        file_pull=dict(type='bool', default=False),
+        file_pull_timeout=dict(type='int', default=300),
+        remote_scp_server=dict(type='str'),
+        remote_scp_server_user=dict(type='str'),
+        remote_scp_server_password=dict(no_log=True),
     )
-    module = get_network_module(argument_spec=argument_spec,
-                                supports_check_mode=True)
+
+    argument_spec.update(nxos_argument_spec)
+
+    required_if = [("file_pull", True, ["remote_file", "remote_scp_server"]),
+                   ("file_pull", False, ["local_file"])]
+
+    required_together = [['remote_scp_server',
+                          'remote_scp_server_user',
+                          'remote_scp_server_password']]
+
+    module = AnsibleModule(argument_spec=argument_spec,
+                           required_if=required_if,
+                           required_together=required_together,
+                           supports_check_mode=True)
+
+    file_pull = module.params['file_pull']
+
+    if file_pull:
+        if not HAS_PEXPECT:
+            module.fail_json(
+                msg='library pexpect is required when file_pull is True but does not appear to be '
+                    'installed. It can be installed using `pip install pexpect`'
+            )
+    else:
+        if not HAS_PARAMIKO:
+            module.fail_json(
+                msg='library paramiko is required when file_pull is False but does not appear to be '
+                    'installed. It can be installed using `pip install paramiko`'
+            )
+
+        if not HAS_SCP:
+            module.fail_json(
+                msg='library scp is required when file_pull is False but does not appear to be '
+                    'installed. It can be installed using `pip install scp`'
+            )
+    warnings = list()
+    check_args(module, warnings)
+    results = dict(changed=False, warnings=warnings)
 
     local_file = module.params['local_file']
     remote_file = module.params['remote_file']
     file_system = module.params['file_system']
 
-    changed = False
-    transfer_status = 'No Transfer'
+    results['transfer_status'] = 'No Transfer'
+    results['file_system'] = file_system
 
-    if not os.path.isfile(local_file):
-        module.fail_json(msg="Local file {} not found".format(local_file))
+    if file_pull:
+        src = remote_file.split('/')[-1]
+        local = local_file or src
 
-    dest = remote_file or os.path.basename(local_file)
-    remote_exists = remote_file_exists(module, dest, file_system=file_system)
+        if not module.check_mode:
+            copy_file_from_remote(module, local, file_system=file_system)
+            results['transfer_status'] = 'Received'
 
-    if not remote_exists:
-        changed = True
-        file_exists = False
+        results['changed'] = True
+        results['remote_file'] = src
+        results['local_file'] = local
     else:
-        file_exists = True
+        if not local_file_exists(module):
+            module.fail_json(msg="Local file {0} not found".format(local_file))
 
-    if not module.check_mode and not file_exists:
-        try:
-            transfer_file(module, dest)
-            transfer_status = 'Sent'
-        except ShellError:
-            clie = get_exception()
-            module.fail_json(msg=str(clie))
+        dest = remote_file or os.path.basename(local_file)
+        remote_exists = remote_file_exists(module, dest, file_system=file_system)
 
-    if remote_file is None:
-        remote_file = os.path.basename(local_file)
+        if not remote_exists:
+            results['changed'] = True
+            file_exists = False
+        else:
+            file_exists = True
 
-    module.exit_json(changed=changed,
-                     transfer_status=transfer_status,
-                     local_file=local_file,
-                     remote_file=remote_file,
-                     file_system=file_system)
+        if not module.check_mode and not file_exists:
+            transfer_file_to_device(module, dest)
+            results['transfer_status'] = 'Sent'
 
+        results['local_file'] = local_file
+        if remote_file is None:
+            remote_file = os.path.basename(local_file)
+        results['remote_file'] = remote_file
+
+    module.exit_json(**results)
 
 if __name__ == '__main__':
     main()

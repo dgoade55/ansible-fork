@@ -1,46 +1,28 @@
 #!powershell
-# This file is part of Ansible
-#
-# Ansible is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# Ansible is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with Ansible.  If not, see <http://www.gnu.org/licenses/>.
 
-# WANT_JSON
-# POWERSHELL_COMMON
+# GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
 
-$params = Parse-Args $args $true;
+#Requires -Module Ansible.ModuleUtils.Legacy
 
-$src = Get-Attr $params "src" (Get-Attr $params "path" $FALSE);
-If (-not $src)
-{
-    Fail-Json (New-Object psobject) "missing required argument: src";
+$params = Parse-Args $args -supports_check_mode $true;
+$src = Get-AnsibleParam -obj $params -name "src" -type "path" -aliases "path" -failifempty $true;
+
+$result = @{
+    changed = $false;
 }
 
-If (Test-Path -PathType Leaf $src)
+If (Test-Path -Path $src -PathType Leaf)
 {
     $bytes = [System.IO.File]::ReadAllBytes($src);
-    $content = [System.Convert]::ToBase64String($bytes);
-    $result = New-Object psobject @{
-        changed = $false
-        encoding = "base64"
-        content = $content
-    };
+    $result.content = [System.Convert]::ToBase64String($bytes);
+    $result.encoding = "base64";
     Exit-Json $result;
 }
-ElseIf (Test-Path -PathType Container $src)
+ElseIf (Test-Path -Path $src -PathType Container)
 {
-    Fail-Json (New-Object psobject) ("is a directory: " + $src);
+    Fail-Json $result "Path $src is a directory";
 }
 Else
 {
-    Fail-Json (New-Object psobject) ("file not found: " + $src);
+    Fail-Json $result "Path $src is not found";
 }

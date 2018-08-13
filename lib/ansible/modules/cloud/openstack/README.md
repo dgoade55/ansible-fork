@@ -17,7 +17,7 @@ Naming
   detail. A good example of this are floating IPs, which can come from either
   Nova or Neutron, but which one they come from is immaterial to an end user.
 * If the module is one that a cloud admin would expect to use, it should be
-  be named with the service and the resouce, such as os\_keystone\_domain.
+  be named with the service and the resource, such as os\_keystone\_domain.
 * If the module is one that a cloud admin and a cloud consumer could both use,
   the cloud consumer rules apply.
 
@@ -48,12 +48,13 @@ Libraries
 * All modules should extends\_documentation\_fragment: openstack to go along
   with openstack\_full\_argument\_spec.
 * All complex cloud interaction or interoperability code should be housed in
-  the [shade](http://git.openstack.org/cgit/openstack-infra/shade) library.
+  the [openstacksdk](http://git.openstack.org/cgit/openstack/openstacksdk)
+  library.
 * All OpenStack API interactions should happen via shade and not via
   OpenStack Client libraries. The OpenStack Client libraries do no have end
   users as a primary audience, they are for intra-server communication. The
   python-openstacksdk is the future there, and shade will migrate to it when
-  its ready in a manner that is not noticable to ansible users.
+  its ready in a manner that is not noticeable to ansible users.
 
 Testing
 -------
